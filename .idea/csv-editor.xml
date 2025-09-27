@@ -136,6 +136,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\full_housing_eda.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\full_housing_scraped_data.csv">
           <value>
             <Attribute>
