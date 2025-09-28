@@ -1,23 +1,31 @@
+import numpy as np
 from numpy import ma
 from sentence_transformers import SentenceTransformer
 import faiss
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 from textwrap import dedent
 import pandas as pd
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+# from langchain.text_splitter import RecursiveCharacterTextSplitter
 import torch
 import re
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from rank_bm25 import BM25Okapi
+
+# from RAG import flat_docs
 
 
-def chunk_text(text, chunk_size=500, chunk_overlap=100):
-    words = str(text).split()
-    chunks = []
+# from RAG import splitter
 
-    for i in range(0, len(words), chunk_size - chunk_overlap):
-        chunk = ' '.join(words[i: i + chunk_size])
-        chunks.append(chunk)
 
-    return chunks
+# def chunk_text(text, chunk_size=500, chunk_overlap=100):
+    # words = str(text).split()
+    # chunks = []
+    #
+    # for i in range(0, len(words), chunk_size - chunk_overlap):
+    #     chunk = ' '.join(words[i: i + chunk_size])
+    #     chunks.append(chunk)
+    #
+    # return chunks
 
 
 class HousingBankRAG:
@@ -32,15 +40,24 @@ class HousingBankRAG:
 
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
-            chunk_overlap=100
+            chunk_overlap=100,
+            separators=['\n\n', '\n', ' ', '']
         )
 
         df = pd.read_csv('full_housing_eda.csv')
         texts = df['Text'].to_list()
-        docs = list(map(chunk_text, texts))
-        flat_docs = [chunk for doc in docs for chunk in doc]
+        texts = [str(text) for text in texts]
+        big_text = '\n\n'.join(texts)
 
-        doc_embeddings = self.embed_model.encode(flat_docs, convert_to_numpy=True)
+        self.docs = self.splitter.split_text(big_text)
+        # docs = list(map(chunk_text, texts))
+
+        tokenized_docs = [d.split() for d in self.docs]
+        self.bm25 = BM25Okapi(tokenized_docs)
+
+        # flat_docs = [chunk for doc in self.docs for chunk in doc]
+        flat_docs = self.docs
+        doc_embeddings = self.embed_model.encode(self.docs, convert_to_numpy=True)
 
         faiss.normalize_L2(doc_embeddings)
 
@@ -61,13 +78,26 @@ class HousingBankRAG:
         self.model = None
 
 
-    def retrieve(self, query, top_k=3):
+    def retrieve(self, query, top_k=3,alpha = 0.5):
         q_emb = self.embed_model.encode([query], convert_to_numpy=True)
         faiss.normalize_L2(q_emb)
 
         D, I = self.index.search(q_emb, top_k)
+        faiss_scores = np.zeros(len(self.docs))
 
-        return [self.id2doc[i] for i in I[0]]
+        for idx, score in zip(I[0],D[0]):
+            faiss_scores[idx] = 1 + (score + 1e-9)
+
+        bm25_scores = self.bm25.get_scores(query.split())
+
+        faiss_scores = (faiss_scores - faiss_scores.min()) / (faiss_scores.max() - faiss_scores.min() + 1e-9)
+        bm25_scores = (bm25_scores - bm25_scores.min()) / (bm25_scores.max() - bm25_scores.min() + 1e-9)
+
+
+        hybrid_scores = alpha * faiss_scores + (1 - alpha) * bm25_scores
+
+        top_indices = np.argsort(hybrid_scores)[::-1][:top_k]
+        return [self.docs[i] for i in top_indices]
 
 
 
@@ -130,12 +160,12 @@ class HousingBankRAG:
         return self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
 
-    def search_question(self,query,top_k=3,max_new_tokens=1024):
+    def search_question(self,query,top_k=3,max_new_tokens=1024,alpha = 0.5):
 
         # results = self.retrieve(query)
         data_row = {
             'question': query,
-            'context': '\n'.join(self.retrieve(query,top_k))
+            'context': '\n'.join(self.retrieve(query,top_k,alpha))
         }
 
         prompt = self.augment(data_row)

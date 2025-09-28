@@ -18,15 +18,17 @@ st.markdown("""
 ___
 """)
 
-top_k = st.slider('Choose top_k',min_value=1,max_value=6)
+top_k = st.slider('Choose top_k',min_value=1,max_value=6,value= 3)
 max_new_tokens = st.selectbox('Select max_new_tokens:',[128,256,512,1024])
+alpha = st.slider('Choose alpha (BM25 -- FAISS):',min_value=0.0,max_value=1.0,value= 0.5,step=0.05)
+
 query_text =  st.text_input('Question:',key='q')
 
 
 
 
 def get_answer(query):
-    return rag.search_question(query, top_k=top_k,max_new_tokens=max_new_tokens)
+    return rag.search_question(query, top_k=top_k,max_new_tokens=max_new_tokens,alpha=alpha)
 
 
 
