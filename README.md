@@ -17,9 +17,14 @@ ___
 - ### Thu-Sun:
   - EDA
   - RAG
+    - Hybrid RAG
+    - Cashing
   - LLM
+  - Format Code and implement function calls
 - ### Mon:
   - Frontend
+    - Streamlit
+    - MangoDB
   - Presentation prep
 - ### Tue:
   - Story
