@@ -10,7 +10,7 @@ import torch
 import re
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from rank_bm25 import BM25Okapi
-
+from RAG_DB import RAGDataBase
 # from RAG import flat_docs
 
 
@@ -76,11 +76,17 @@ class HousingBankRAG:
         # )
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
         self.model = None
+        self.db = RAGDataBase()
 
-
-    def retrieve(self, query, top_k=3,alpha = 0.5):
+    def embed_query(self,query):
         q_emb = self.embed_model.encode([query], convert_to_numpy=True)
         faiss.normalize_L2(q_emb)
+        return q_emb
+
+    def retrieve(self, query, top_k=3,alpha = 0.5):
+        # q_emb = self.embed_model.encode([query], convert_to_numpy=True)
+        # faiss.normalize_L2(q_emb)
+        q_emb = self.embed_query(query)
 
         D, I = self.index.search(q_emb, top_k)
         faiss_scores = np.zeros(len(self.docs))
@@ -160,9 +166,16 @@ class HousingBankRAG:
         return self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
 
-    def search_question(self,query,top_k=3,max_new_tokens=1024,alpha = 0.5):
+    def search_question(self,query,top_k=3,max_new_tokens=1024,alpha = 0.5, use_db=True):
 
         # results = self.retrieve(query)
+        #
+        q_emb = self.embed_query(query)
+        question, answer = self.db.search_question(q_emb)
+        # print(question)
+        if question is not None and use_db:
+            return answer
+
         data_row = {
             'question': query,
             'context': '\n'.join(self.retrieve(query,top_k,alpha))
@@ -170,6 +183,10 @@ class HousingBankRAG:
 
         prompt = self.augment(data_row)
 
-        return self.generate(prompt,max_new_tokens)
+        answer = self.generate(prompt,max_new_tokens)
+        if use_db:
+            self.db.insert_question(query,answer, q_emb)
+
+        return answer
 
 
