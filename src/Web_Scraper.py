@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 import requests
 import time
 import re
+from pathlib import Path
 
 # Goes through the urls in the csv file and scrapes the HTML
 
@@ -61,7 +62,11 @@ def web_scraper(csv_input_file):
 
     # Filter out Empty urls
     df = df.dropna(subset=['Text'])
+    ROOT = Path(__file__).resolve().parent.parent
+    data_dir = ROOT / "data"
+    data_dir.mkdir(exist_ok=True)
     output_file = f'{bank}_scraped_data.csv'
+    output_file = data_dir / output_file
 
     # Save data in a new file
     df.to_csv(output_file)

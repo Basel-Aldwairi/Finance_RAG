@@ -5,6 +5,7 @@ from collections import deque
 import time
 import pandas as pd
 import re
+from pathlib import Path
 
 
 # Crawl through urls of a base_url in BFS traversal, avoiding any urls that have a skip_pattern
@@ -65,9 +66,13 @@ def crawl_website(base_url, max_pages=100, skip_patterns=None):
                        'URL': urls})
 
     # Saved the Scrapped links in a .csv file using Pandas
+    ROOT = Path(__file__).resolve().parent.parent
+    data_dir = ROOT / "data"
+    data_dir.mkdir(exist_ok=True)
     match = re.search(r"https?://(?:www\.)?([^./]+)", base_url)
     web_site_name = match.group(1)
     output_file = web_site_name + '_crawled_links.csv'
+    output_file = data_dir / output_file
     df.to_csv(output_file, index=False)
 
     # Return csv file

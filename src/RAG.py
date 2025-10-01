@@ -1,61 +1,57 @@
 import numpy as np
-from numpy import ma
 from sentence_transformers import SentenceTransformer
 import faiss
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from textwrap import dedent
 import pandas as pd
-# from langchain.text_splitter import RecursiveCharacterTextSplitter
 import torch
 import re
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from rank_bm25 import BM25Okapi
 from RAG_DB import RAGDataBase
-# from RAG import flat_docs
-
-
-# from RAG import splitter
-
-
-# def chunk_text(text, chunk_size=500, chunk_overlap=100):
-    # words = str(text).split()
-    # chunks = []
-    #
-    # for i in range(0, len(words), chunk_size - chunk_overlap):
-    #     chunk = ' '.join(words[i: i + chunk_size])
-    #     chunks.append(chunk)
-    #
-    # return chunks
+from pathlib import Path
 
 
 class HousingBankRAG:
 
-    def __init__(self,model_id = "LiquidAI/LFM2-2.6B"):
+    def __init__(self,model_id= "LiquidAI/LFM2-2.6B",documents_csv=None, directory= None):
 
-
+        # Clean Cashe for GPU to avoid OOM
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.cuda.empty_cache()
 
+        # Embeder
         self.embed_model = SentenceTransformer('all-MiniLM-L6-v2',device='cpu')
 
+        # Chunker
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=100,
             separators=['\n\n', '\n', ' ', '']
         )
 
-        df = pd.read_csv('full_housing_eda.csv')
+        # Reading documents
+        if documents_csv is None:
+            documents_csv='full_housing_eda.csv'
+        if directory is None:
+            directory = 'housing_bank_data'
+
+        ROOT = Path(__file__).resolve().parent.parent  # go to project root
+        CSV_PATH = ROOT / directory / documents_csv
+        df = pd.read_csv(CSV_PATH)
         texts = df['Text'].to_list()
+
+        # Flattening Documents
         texts = [str(text) for text in texts]
         big_text = '\n\n'.join(texts)
 
+        # Chunking
         self.docs = self.splitter.split_text(big_text)
-        # docs = list(map(chunk_text, texts))
 
         tokenized_docs = [d.split() for d in self.docs]
         self.bm25 = BM25Okapi(tokenized_docs)
 
-        # flat_docs = [chunk for doc in self.docs for chunk in doc]
+        # Embedding
         flat_docs = self.docs
         doc_embeddings = self.embed_model.encode(self.docs, convert_to_numpy=True)
 
@@ -67,35 +63,37 @@ class HousingBankRAG:
 
         torch.cuda.empty_cache()
 
+        # LLM Model
         self.model_id = model_id
-        # self.model = AutoModelForCausalLM.from_pretrained(
-        #     model_id,
-        #     device_map=None,
-        #     dtype="bfloat16",
-        #     #    attn_implementation="flash_attention_2" <- uncomment on compatible GPU
-        # )
+
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
         self.model = None
+
+        # Database
         self.db = RAGDataBase()
 
+    # Search if Question is cashed in Database
     def embed_query(self,query):
         q_emb = self.embed_model.encode([query], convert_to_numpy=True)
         faiss.normalize_L2(q_emb)
         return q_emb
 
+    # Retrieval - Hybrid
     def retrieve(self, query, top_k=3,alpha = 0.5):
-        # q_emb = self.embed_model.encode([query], convert_to_numpy=True)
-        # faiss.normalize_L2(q_emb)
+
         q_emb = self.embed_query(query)
 
+        # FAISS
         D, I = self.index.search(q_emb, top_k)
         faiss_scores = np.zeros(len(self.docs))
 
         for idx, score in zip(I[0],D[0]):
             faiss_scores[idx] = 1 + (score + 1e-9)
 
+        # Fuzzy
         bm25_scores = self.bm25.get_scores(query.split())
 
+        # Normalizations and calculating weighted scores
         faiss_scores = (faiss_scores - faiss_scores.min()) / (faiss_scores.max() - faiss_scores.min() + 1e-9)
         bm25_scores = (bm25_scores - bm25_scores.min()) / (bm25_scores.max() - bm25_scores.min() + 1e-9)
 
@@ -106,46 +104,9 @@ class HousingBankRAG:
         return [self.docs[i] for i in top_indices]
 
 
-
-    def generate(self,prompt,max_new_tokens = 512):
-
-        if self.model is None:
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_id,
-                device_map='cuda',
-                dtype="bfloat16",
-                #    attn_implementation="flash_attention_2" <- uncomment on compatible GPU
-            ).to('cuda')
-
-        input_ids = self.tokenizer.apply_chat_template(
-            [{"role": "user", "content": prompt}],
-            add_generation_prompt=True,
-            return_tensors="pt",
-            # tokenize=True,
-        ).to(self.model.device)
-
-        with torch.no_grad():
-            output = self.model.generate(input_ids,
-                                         do_sample=True,
-                                         temperature=0.3,
-                                         min_p=0.15,
-                                         repetition_penalty=1.05,
-                                        max_new_tokens=max_new_tokens,
-                                         )
-
-        raw_output = self.tokenizer.decode(output[0], skip_special_tokens=False)
-        # print(raw_output)
-        matches = re.findall(r"<\|im_start\|>assistant\s*(.*?)(?=<\|im_end\|>)", raw_output, re.S)
-
-        # self.model.to('cpu')
-        # torch.cuda.empty_cache()
-
-        if matches:
-            return matches[-1].strip()
-        return None
-
-
+    # Augmentation
     def augment(self,data_row):
+        # Prompt Engineering for answers
         prompt = dedent(f"""
         You are a helpful assistant.
         Only use the information provided below to answer the question,
@@ -166,13 +127,45 @@ class HousingBankRAG:
         return self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
 
+    # LLM generation
+    def generate(self,prompt,max_new_tokens = 512):
+
+        if self.model is None:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_id,
+                device_map='cuda',
+                dtype="bfloat16",
+            ).to('cuda')
+
+        input_ids = self.tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            add_generation_prompt=True,
+            return_tensors="pt",
+        ).to(self.model.device)
+
+        with torch.no_grad():
+            output = self.model.generate(input_ids,
+                                         do_sample=True,
+                                         temperature=0.3,
+                                         min_p=0.15,
+                                         repetition_penalty=1.05,
+                                        max_new_tokens=max_new_tokens,
+                                         )
+
+        raw_output = self.tokenizer.decode(output[0], skip_special_tokens=False)
+        matches = re.findall(r"<\|im_start\|>assistant\s*(.*?)(?=<\|im_end\|>)", raw_output, re.S)
+
+        # Return Answer
+        if matches:
+            return matches[-1].strip()
+        return None
+
+
+    # Question Answering - Calls the other methods of RAG
     def search_question(self,query,top_k=3,max_new_tokens=1024,alpha = 0.5, use_db=True):
 
-        # results = self.retrieve(query)
-        #
         q_emb = self.embed_query(query)
         question, answer = self.db.search_question(q_emb)
-        # print(question)
         if question is not None and use_db:
             return answer
 
@@ -188,5 +181,3 @@ class HousingBankRAG:
             self.db.insert_question(query,answer, q_emb)
 
         return answer
-
-

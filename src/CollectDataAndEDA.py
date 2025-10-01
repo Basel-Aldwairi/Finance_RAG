@@ -10,7 +10,7 @@ over_all_time = time.time()
 
 # Crawl and get Links
 skip_patterns = ['/ar', '/upload', '/video']
-max_pages = 1000
+max_pages = 5
 links_csv  = crawl_website(web_site, max_pages=max_pages, skip_patterns=skip_patterns)
 
 # Scrap Data from collected Links

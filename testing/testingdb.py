@@ -1,4 +1,4 @@
-from test import TestDB
+from testing.test import TestDB
 
 db = TestDB()
 

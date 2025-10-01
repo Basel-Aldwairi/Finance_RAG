@@ -1,6 +1,7 @@
 import pandas as pd
 import re
 import time
+from pathlib import Path
 
 # Different Data clean up functions
 
@@ -105,7 +106,12 @@ def clean_data(csv_file):
     # Saving the cleaned data
 
     df['Text'] = new_list
-    output_file = csv_file[:-4] + '_eda.csv'
+
+    ROOT = Path(__file__).resolve().parent.parent
+    data_dir = ROOT / "data"
+    data_dir.mkdir(exist_ok=True)
+    output_file = str(csv_file)[:-4] + '_eda.csv'
+    output_file = data_dir / output_file
     df.to_csv(output_file, index=False)
     end_time = time.time() - start_time
     print(f'[INFO] Finished Script. Time Take {end_time:.2f}s')
